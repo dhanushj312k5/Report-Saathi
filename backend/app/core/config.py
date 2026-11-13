@@ -16,6 +16,9 @@ def get_default_tesseract_path() -> str:
         return "/opt/homebrew/bin/tesseract"
     return "/usr/bin/tesseract"
 
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BACKEND_ENV = os.path.join(BACKEND_DIR, ".env")
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "ReportSaathi"
     API_V1_STR: str = "/api"
@@ -54,7 +57,7 @@ class Settings(BaseSettings):
     TELEGRAM_DEFAULT_CHAT_ID: Optional[str] = os.getenv("TELEGRAM_DEFAULT_CHAT_ID", "")
 
     class Config:
-        env_file = ".env"
+        env_file = (BACKEND_ENV, ".env")
         extra = "ignore"
 
 settings = Settings()
