@@ -18,10 +18,13 @@ app = FastAPI(
 )
 
 # CORS configuration
+origins = settings.ALLOWED_ORIGINS if isinstance(settings.ALLOWED_ORIGINS, list) else [str(settings.ALLOWED_ORIGINS)]
+use_wildcard = "*" in origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows local Vite dev server and mobile clients
-    allow_credentials=True,
+    allow_origins=["*"] if use_wildcard else origins,
+    allow_credentials=not use_wildcard,
     allow_methods=["*"],
     allow_headers=["*"],
 )

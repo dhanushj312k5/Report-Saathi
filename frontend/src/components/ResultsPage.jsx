@@ -14,17 +14,44 @@ import {
   ArrowDownRight, 
   HeartHandshake, 
   MessageSquareQuote,
-  Sparkles,
-  Share2
+  Share2,
+  FileQuestion,
+  Cpu,
+  Bookmark,
+  Save,
+  Trash2,
+  Loader2,
+  Lock,
+  ShieldCheck,
+  Info,
+  Send
 } from 'lucide-react';
 import MedicalDisclaimer from './MedicalDisclaimer';
+import ReportChatWidget from './ReportChatWidget';
+import TelegramNotificationModal from './TelegramNotificationModal';
+import { saveReportToHistory, deleteReportFromHistory, isSupabaseConfigured } from '../services/supabase';
 
-export default function ResultsPage({ report, onBackToDashboard }) {
-  const [filter, setFilter] = useState('all'); // 'all', 'attention', 'normal'
+export default function ResultsPage({ 
+  report, 
+  currentUser, 
+  onBackToDashboard, 
+  onRequireAuth,
+  onReportDeleted
+}) {
+  const [filter, setFilter] = useState('all');
   const [showRawText, setShowRawText] = useState(false);
   const [copiedQuestions, setCopiedQuestions] = useState(false);
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [expandedItems, setExpandedItems] = useState({});
+  const [showTelegramModal, setShowTelegramModal] = useState(false);
+
+  // Save / Delete states
+  const [isSaved, setIsSaved] = useState(Boolean(report.is_saved_in_supabase || report.saved_record_id));
+  const [savedRecordId, setSavedRecordId] = useState(report.saved_record_id || null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [saveMessage, setSaveMessage] = useState('');
+  const [saveError, setSaveError] = useState('');
 
   if (!report) return null;
 
@@ -63,6 +90,70 @@ export default function ResultsPage({ report, onBackToDashboard }) {
     window.print();
   };
 
+  const handleSaveReport = async () => {
+    setSaveError('');
+    setSaveMessage('');
+
+    // Check if Supabase is configured
+    if (!isSupabaseConfigured()) {
+      setSaveMessage(
+        'Demo Mode: Supabase credentials are not configured in your environment. Report is retained in your current local session only and was NOT saved to a database.'
+      );
+      return;
+    }
+
+    // Check if user is signed in
+    if (!currentUser) {
+      onRequireAuth();
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const res = await saveReportToHistory(report, currentUser.id);
+      setIsSaving(false);
+      if (res.success) {
+        setIsSaved(true);
+        if (res.record?.id) {
+          setSavedRecordId(res.record.id);
+        }
+        setSaveMessage(res.message);
+      } else {
+        setSaveMessage(res.message);
+      }
+    } catch (err) {
+      setIsSaving(false);
+      console.error('Save report error:', err);
+      setSaveError(err.message || 'Failed to save report to database.');
+    }
+  };
+
+  const handleDeleteReport = async () => {
+    if (!window.confirm('Are you sure you want to permanently delete this report from your history?')) {
+      return;
+    }
+
+    setIsDeleting(true);
+    setSaveError('');
+
+    try {
+      if (savedRecordId && currentUser) {
+        await deleteReportFromHistory(savedRecordId, currentUser.id);
+      }
+      setIsDeleting(false);
+      setIsSaved(false);
+      setSavedRecordId(null);
+      setSaveMessage('Report record was permanently deleted from your database.');
+      if (onReportDeleted) {
+        onReportDeleted(savedRecordId || report.id);
+      }
+    } catch (err) {
+      setIsDeleting(false);
+      console.error('Delete error:', err);
+      setSaveError(err.message || 'Failed to delete report.');
+    }
+  };
+
   return (
     <div className="max-w-5xl mx-auto space-y-8 animate-fadeIn pb-20">
       {/* Top Action Bar */}
@@ -75,11 +166,13 @@ export default function ResultsPage({ report, onBackToDashboard }) {
           <span>Back to Dashboard</span>
         </button>
 
-        <div className="flex items-center gap-2">
-          <span className="hidden sm:inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-full bg-white/5 text-slate-300 border border-white/10">
-            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            Realistic Clinical Data
-          </span>
+        <div className="flex flex-wrap items-center gap-2">
+          {report.ai_engine && (
+            <span className="hidden sm:inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-full bg-red-500/10 text-red-300 border border-red-500/20">
+              <Cpu className="w-3.5 h-3.5 text-red-400" />
+              <span>{report.ai_engine}</span>
+            </span>
+          )}
 
           <button
             onClick={handleCopySummary}
@@ -91,8 +184,18 @@ export default function ResultsPage({ report, onBackToDashboard }) {
           </button>
 
           <button
+            onClick={() => setShowTelegramModal(true)}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold px-3.5 py-2 rounded-full glass-panel text-[#229ED9] hover:text-white hover:bg-[#229ED9]/20 border border-[#229ED9]/30 transition cursor-pointer"
+            title="Send report summary to Telegram"
+          >
+            <Send className="w-3.5 h-3.5 transform -rotate-12" />
+            <span className="hidden sm:inline">Send to Telegram</span>
+            <span className="sm:hidden">Telegram</span>
+          </button>
+
+          <button
             onClick={handlePrint}
-            className="inline-flex items-center gap-1.5 text-xs font-semibold px-4 py-2 rounded-full bg-crimson-600 hover:bg-crimson-500 text-white transition cursor-pointer shadow-lg shadow-crimson-600/30"
+            className="inline-flex items-center gap-1.5 text-xs font-semibold px-4 py-2 rounded-full bg-red-600 hover:bg-red-500 text-white transition cursor-pointer shadow-lg shadow-red-600/30"
             title="Print summary"
           >
             <Printer className="w-3.5 h-3.5" />
@@ -101,16 +204,133 @@ export default function ResultsPage({ report, onBackToDashboard }) {
         </div>
       </div>
 
-      {/* Mandatory Safety Notice */}
+      {/* Mandatory Visible Educational-Use-Only Disclaimer */}
       <MedicalDisclaimer />
+
+      {/* ================= OPT-IN SUPABASE HEALTH HISTORY SAVE SECTION ================= */}
+      <div className="glass-panel rounded-3xl p-5 sm:p-6 border-white/10 space-y-3.5 shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                Health History Persistence
+              </span>
+              {!isSupabaseConfigured() ? (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-white/10">
+                  Demo Mode (Supabase Not Configured)
+                </span>
+              ) : currentUser ? (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  Signed In as {currentUser.email}
+                </span>
+              ) : (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  Guest Session (Not Signed In)
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
+              By default, all reports are <strong>ephemeral</strong> and never saved. You can choose whether to store this educational summary to review in your history.
+            </p>
+          </div>
+
+          {/* Action Button: Save or Delete */}
+          <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+            {isSaved ? (
+              <button
+                onClick={handleDeleteReport}
+                disabled={isDeleting}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 font-bold text-xs transition cursor-pointer disabled:opacity-50"
+              >
+                {isDeleting ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete from History</span>
+                  </>
+                )}
+              </button>
+            ) : (
+              <button
+                onClick={handleSaveReport}
+                disabled={isSaving}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-600/30 transition cursor-pointer disabled:opacity-50"
+              >
+                {isSaving ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Save to History</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Explain what is stored vs what is NEVER stored */}
+        <div className="bg-black/40 rounded-2xl p-3.5 border border-white/5 text-[11px] text-slate-400 space-y-1">
+          <div className="flex items-center gap-1.5 font-semibold text-slate-300">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Strict Privacy Transparency:</span>
+          </div>
+          <p>
+            • <strong>What is saved:</strong> Report title, test names, recorded numerical values, units, biological reference intervals, and doctor questions.
+          </p>
+          <p>
+            • <strong>What is NEVER saved:</strong> Original PDF/image files, document scans, and unredacted raw medical text are <strong>never</strong> uploaded or persisted.
+          </p>
+        </div>
+
+        {/* Status / Error Alerts */}
+        {saveMessage && (
+          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-3 text-xs text-emerald-200 flex items-start gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+            <p>{saveMessage}</p>
+          </div>
+        )}
+
+        {saveError && (
+          <div className="bg-rose-500/10 border border-rose-500/20 rounded-2xl p-3 text-xs text-rose-200 flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            <p>{saveError}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Warning if Document Clarity is Insufficient */}
+      {report.is_clarity_sufficient === false && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-3xl p-5 sm:p-6 text-amber-200 flex items-start gap-3.5">
+          <FileQuestion className="w-6 h-6 text-amber-400 shrink-0 mt-0.5" />
+          <div className="space-y-1 text-xs sm:text-sm leading-relaxed">
+            <h4 className="font-bold text-amber-300 text-base">
+              Partial or Unclear Document Text
+            </h4>
+            <p>
+              {report.clarity_note || "Some sections of your document could not be extracted with high confidence due to image compression, angle, or handwriting."}
+            </p>
+            <p className="font-semibold text-white pt-1">
+              ⚠️ Please bring your original, physical laboratory printout to a qualified healthcare physician for complete clinical evaluation.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Report Header Card */}
       <div className="glass-panel rounded-[32px] p-6 sm:p-8 space-y-6 border-white/10 shadow-2xl">
         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-6 border-b border-white/10">
           <div>
             <div className="flex items-center gap-2 mb-1.5">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-crimson-300 bg-crimson-500/20 px-2.5 py-0.5 rounded-full border border-crimson-500/30">
-                Diagnostic Analysis
+              <span className="text-[10px] font-bold uppercase tracking-wider text-red-300 bg-red-500/20 px-2.5 py-0.5 rounded-full border border-red-500/30">
+                Medical Literacy Breakdown
               </span>
               <span className="text-xs text-slate-400 font-mono">
                 {report.patientCode}
@@ -138,7 +358,7 @@ export default function ResultsPage({ report, onBackToDashboard }) {
               ) : (
                 <>
                   <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>All Parameters in Normal Range</span>
+                  <span>All Detected Parameters in Normal Range</span>
                 </>
               )}
             </span>
@@ -147,7 +367,7 @@ export default function ResultsPage({ report, onBackToDashboard }) {
 
         {/* Executive Summary */}
         <div className="space-y-2">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-crimson-400">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-red-400">
             Plain-Language Overview
           </h2>
           <p className="text-sm sm:text-base text-slate-200 leading-relaxed font-normal">
@@ -156,31 +376,33 @@ export default function ResultsPage({ report, onBackToDashboard }) {
         </div>
 
         {/* Key Takeaways */}
-        <div className="pt-2">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">
-            Key Takeaways
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {report.keyTakeaways.map((point, idx) => (
-              <div
-                key={idx}
-                className="flex items-start gap-3 bg-white/[0.03] p-4 rounded-2xl border border-white/5 text-xs sm:text-sm text-slate-200"
-              >
-                <span className="w-5 h-5 rounded-full bg-crimson-500/20 text-crimson-400 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
-                  ✓
-                </span>
-                <span className="leading-snug">{point}</span>
-              </div>
-            ))}
+        {report.keyTakeaways && report.keyTakeaways.length > 0 && (
+          <div className="pt-2">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">
+              Key Takeaways
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {report.keyTakeaways.map((point, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-start gap-3 bg-white/[0.03] p-4 rounded-2xl border border-white/5 text-xs sm:text-sm text-slate-200"
+                >
+                  <span className="w-5 h-5 rounded-full bg-red-500/20 text-red-400 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
+                    ✓
+                  </span>
+                  <span className="leading-snug">{point}</span>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
-      {/* Extracted Values & Plain-Language Explanations */}
+      {/* Parameters: Clearly Distinguishing Source-Extracted Facts vs AI Explanations */}
       <div className="space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Layers className="w-5 h-5 text-crimson-400" />
+          <div className="flex flex-wrap items-center gap-2">
+            <Layers className="w-5 h-5 text-red-400" />
             <h2 className="text-xl font-bold text-white">
               Extracted Parameters & Explanations ({filteredParams.length})
             </h2>
@@ -192,7 +414,7 @@ export default function ResultsPage({ report, onBackToDashboard }) {
               onClick={() => setFilter('all')}
               className={`px-3.5 py-1 rounded-full transition cursor-pointer ${
                 filter === 'all'
-                  ? 'bg-crimson-600 text-white font-bold'
+                  ? 'bg-red-600 text-white font-bold'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
@@ -266,32 +488,52 @@ export default function ResultsPage({ report, onBackToDashboard }) {
                     )}
                   </div>
 
-                  {/* Value vs Reference Range */}
-                  <div className="grid grid-cols-2 gap-2 bg-black/40 rounded-2xl p-3.5 mb-4 text-xs border border-white/5">
-                    <div>
-                      <span className="text-slate-400 block text-[11px]">Extracted Reading</span>
-                      <span className={`font-mono font-bold text-base ${
-                        isAbnormal ? 'text-amber-300' : 'text-white'
-                      }`}>
-                        {param.value} <span className="text-xs font-normal text-slate-400">{param.unit}</span>
+                  {/* SECTION 1: SOURCE-EXTRACTED FACTS */}
+                  <div className="bg-black/50 rounded-2xl p-3.5 mb-3.5 border border-white/5 space-y-2">
+                    <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-slate-400 pb-1 border-b border-white/5">
+                      <span className="flex items-center gap-1 text-slate-300">
+                        <Bookmark className="w-3 h-3 text-red-400" />
+                        Source-Extracted Facts (From Document)
                       </span>
+                      <span className="text-slate-500 font-mono">Verbatim</span>
                     </div>
 
-                    <div>
-                      <span className="text-slate-400 block text-[11px]">Standard Reference</span>
-                      <span className="font-mono font-bold text-sm text-slate-300">
-                        {param.referenceRange} <span className="text-xs font-normal text-slate-400">{param.unit}</span>
-                      </span>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="text-slate-400 block text-[11px]">Recorded Result</span>
+                        <span className={`font-mono font-bold text-base ${
+                          isAbnormal ? 'text-amber-300' : 'text-white'
+                        }`}>
+                          {param.value} <span className="text-xs font-normal text-slate-400">{param.unit}</span>
+                        </span>
+                      </div>
+
+                      <div>
+                        <span className="text-slate-400 block text-[11px]">Printed Reference Range</span>
+                        <span className={`font-mono font-bold text-xs ${
+                          param.referenceRange?.includes('N/A') ? 'text-slate-400 italic font-normal' : 'text-slate-300'
+                        }`}>
+                          {param.referenceRange} {param.referenceRange?.includes('N/A') ? '' : param.unit}
+                        </span>
+                      </div>
                     </div>
                   </div>
 
-                  {/* Range Visualizer Bar */}
-                  {param.gaugePercentage && (
-                    <div className="mb-4">
-                      <div className="flex justify-between text-[10px] text-slate-400 mb-1">
-                        <span>Low</span>
-                        <span className="text-slate-300 font-semibold">Standard Window</span>
-                        <span>High</span>
+                  {/* Note if info was missing/unclear */}
+                  {param.unclear_or_missing_note && (
+                    <div className="mb-3 text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 rounded-xl flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+                      <span>{param.unclear_or_missing_note}</span>
+                    </div>
+                  )}
+
+                  {/* Visual Range Indicator Bar */}
+                  {param.gaugePercentage && !param.referenceRange?.includes('N/A') && (
+                    <div className="mb-3.5">
+                      <div className="flex justify-between text-[10px] text-slate-400 mb-1 font-mono">
+                        <span>Lower Bound</span>
+                        <span className="text-slate-300 font-semibold">Normal Interval</span>
+                        <span>Upper Bound</span>
                       </div>
                       <div className="w-full bg-white/10 h-2 rounded-full relative overflow-hidden">
                         <div
@@ -308,10 +550,15 @@ export default function ResultsPage({ report, onBackToDashboard }) {
                     </div>
                   )}
 
-                  {/* Plain Language Explanation */}
-                  <p className="text-xs sm:text-sm text-slate-300 leading-relaxed font-normal">
-                    {param.simpleExplanation}
-                  </p>
+                  {/* SECTION 2: AI EDUCATIONAL EXPLANATION */}
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-red-400 block">
+                      AI Plain-Language Translation
+                    </span>
+                    <p className="text-xs sm:text-sm text-slate-300 leading-relaxed font-normal">
+                      {param.simpleExplanation}
+                    </p>
+                  </div>
                 </div>
 
                 {/* Accordion: Why it matters */}
@@ -319,9 +566,9 @@ export default function ResultsPage({ report, onBackToDashboard }) {
                   <div className="mt-4 pt-3 border-t border-white/5">
                     <button
                       onClick={() => toggleExpand(index)}
-                      className="text-xs text-crimson-400 hover:text-crimson-300 font-semibold flex items-center gap-1 cursor-pointer"
+                      className="text-xs text-red-400 hover:text-red-300 font-semibold flex items-center gap-1 cursor-pointer"
                     >
-                      <span>{isExpanded ? 'Hide biological role' : 'Why does my body monitor this?'}</span>
+                      <span>{isExpanded ? 'Hide physiological role' : 'Why does my body monitor this?'}</span>
                       {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                     </button>
                     {isExpanded && (
@@ -337,21 +584,24 @@ export default function ResultsPage({ report, onBackToDashboard }) {
         </div>
       </div>
 
+      {/* REPORT-SPECIFIC EDUCATIONAL CHAT WIDGET */}
+      <ReportChatWidget report={report} />
+
       {/* Doctor Questions & Lifestyle Guidance */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Questions for Doctor */}
         <div className="glass-panel rounded-3xl p-6 sm:p-7 space-y-4">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-2xl bg-crimson-600/20 text-crimson-400 flex items-center justify-center">
+              <div className="w-9 h-9 rounded-2xl bg-red-600/20 text-red-400 flex items-center justify-center">
                 <MessageSquareQuote className="w-5 h-5" />
               </div>
               <div>
                 <h3 className="font-bold text-white text-base">
-                  Doctor Discussion Points
+                  Doctor Consultation Talking Points
                 </h3>
                 <p className="text-[11px] text-slate-400">
-                  Empowering questions for your clinic appointment
+                  Empowering questions tailored to your results
                 </p>
               </div>
             </div>
@@ -371,7 +621,7 @@ export default function ResultsPage({ report, onBackToDashboard }) {
                 key={idx}
                 className="flex items-start gap-3 bg-black/40 p-3.5 rounded-2xl border border-white/5 text-xs sm:text-sm text-slate-200 leading-snug"
               >
-                <span className="w-5 h-5 rounded-full bg-crimson-500/20 text-crimson-300 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
+                <span className="w-5 h-5 rounded-full bg-red-500/20 text-red-300 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
                   {idx + 1}
                 </span>
                 <span>{q}</span>
@@ -417,13 +667,13 @@ export default function ResultsPage({ report, onBackToDashboard }) {
           className="w-full flex items-center justify-between p-5 hover:bg-white/[0.04] transition text-left cursor-pointer"
         >
           <div className="flex items-center gap-2.5">
-            <FileSearch className="w-5 h-5 text-crimson-400" />
+            <FileSearch className="w-5 h-5 text-red-400" />
             <div>
               <h4 className="font-bold text-white text-sm">
-                OCR Verification Inspector (Original Extracted String)
+                OCR Verification Inspector (Original Extracted Document Text)
               </h4>
               <p className="text-[11px] text-slate-400">
-                Cross-check the AI explanation against raw text extracted directly from the document.
+                Verify the exact verbatim string read from your file before any AI analysis occurred.
               </p>
             </div>
           </div>
@@ -439,6 +689,13 @@ export default function ResultsPage({ report, onBackToDashboard }) {
           </div>
         )}
       </div>
+
+      {/* TELEGRAM NOTIFICATION MODAL */}
+      <TelegramNotificationModal
+        isOpen={showTelegramModal}
+        onClose={() => setShowTelegramModal(false)}
+        report={report}
+      />
     </div>
   );
 }

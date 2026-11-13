@@ -5,6 +5,7 @@ import pytesseract
 
 from app.core.config import settings
 from app.models.schemas import HealthResponse
+from app.services.supabase_client import is_supabase_enabled
 
 router = APIRouter()
 
@@ -12,7 +13,7 @@ router = APIRouter()
 def health_check():
     """
     Returns system health status, tesseract binary presence and version,
-    and configured capabilities.
+    and configured capabilities (Gemini, Supabase).
     """
     tesseract_version = None
     tesseract_found = False
@@ -34,6 +35,8 @@ def health_check():
         tesseract_installed=tesseract_found,
         tesseract_version=tesseract_version,
         gemini_configured=bool(settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "your_gemini_api_key_here"),
+        supabase_configured=is_supabase_enabled(),
+        telegram_bot_configured=bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_TOKEN.strip() not in ("", "your_telegram_bot_token_here", "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ")),
         supported_formats=["pdf", "jpg", "jpeg", "png"],
         max_file_size_mb=10
     )

@@ -9,24 +9,33 @@ import {
   Calendar, 
   ChevronRight, 
   Inbox,
-  ArrowUpRight
+  Trash2,
+  Lock,
+  User,
+  ShieldCheck,
+  RotateCcw
 } from 'lucide-react';
 import MedicalDisclaimer from './MedicalDisclaimer';
+import { isSupabaseConfigured } from '../services/supabase';
 
 export default function Dashboard({ 
   reports, 
+  currentUser,
   onOpenUpload, 
   onSelectReport, 
   onClearReports, 
-  onRestoreSamples 
+  onRestoreSamples,
+  onOpenAuth,
+  onDeleteReport
 }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // 'all', 'attention', 'normal'
 
   const filteredReports = reports.filter((rep) => {
-    const matchesSearch = rep.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          rep.labName.toLowerCase().includes(searchTerm.toLowerCase());
-    if (!matchesSearch) return false;
+    const titleMatch = (rep.title || '').toLowerCase().includes(searchTerm.toLowerCase());
+    const labMatch = (rep.labName || '').toLowerCase().includes(searchTerm.toLowerCase());
+    if (!titleMatch && !labMatch) return false;
+
     if (statusFilter === 'attention') return rep.overallStatus === 'attention_needed';
     if (statusFilter === 'normal') return rep.overallStatus === 'all_normal';
     return true;
@@ -44,23 +53,47 @@ export default function Dashboard({
             <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
               Reports Dashboard
             </h1>
-            <span className="text-[10px] font-bold uppercase tracking-wider bg-crimson-500/20 text-crimson-300 border border-crimson-500/30 px-2.5 py-0.5 rounded-full">
-              Patient Workspace
-            </span>
+            {currentUser ? (
+              <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2.5 py-0.5 rounded-full">
+                Saved User History
+              </span>
+            ) : !isSupabaseConfigured() ? (
+              <span className="text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-slate-400 border border-white/10 px-2.5 py-0.5 rounded-full">
+                Demo Workspace
+              </span>
+            ) : (
+              <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2.5 py-0.5 rounded-full">
+                Guest Workspace
+              </span>
+            )}
           </div>
           <p className="text-xs sm:text-sm text-slate-400 max-w-xl">
-            Review past laboratory analyses, compare biological indicators, and generate printable discussion guides for your next physician consultation.
+            {currentUser 
+              ? `Welcome back! You have ${reports.length} report${reports.length !== 1 ? 's' : ''} in your secure health history.`
+              : 'Review lab results, compare biological markers, and generate doctor discussion guides.'}
           </p>
         </div>
 
-        {/* Primary CTA */}
-        <button
-          onClick={onOpenUpload}
-          className="inline-flex items-center justify-center gap-2 bg-crimson-600 hover:bg-crimson-500 text-white font-bold text-xs sm:text-sm px-6 py-3.5 rounded-full shadow-lg shadow-crimson-600/30 hover:shadow-crimson-600/50 transition cursor-pointer"
-        >
-          <UploadCloud className="w-4 h-4" />
-          <span>Upload Lab Report</span>
-        </button>
+        {/* Action Buttons */}
+        <div className="flex items-center gap-3">
+          {!currentUser && isSupabaseConfigured() && (
+            <button
+              onClick={onOpenAuth}
+              className="inline-flex items-center justify-center gap-1.5 bg-white/10 hover:bg-white/20 text-white font-bold text-xs px-4 py-3 rounded-full transition cursor-pointer"
+            >
+              <User className="w-4 h-4" />
+              <span>Sign In to Sync</span>
+            </button>
+          )}
+
+          <button
+            onClick={onOpenUpload}
+            className="inline-flex items-center justify-center gap-2 bg-[#e51d38] hover:bg-red-600 text-white font-bold text-xs sm:text-sm px-6 py-3.5 rounded-full shadow-lg shadow-red-600/30 hover:shadow-red-600/50 transition cursor-pointer"
+          >
+            <UploadCloud className="w-4 h-4" />
+            <span>Upload Lab Report</span>
+          </button>
+        </div>
       </div>
 
       {/* Safety Notice */}
@@ -97,10 +130,10 @@ export default function Dashboard({
 
         <div className="glass-panel p-5 rounded-3xl">
           <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-            Literacy Standard
+            Data Storage
           </span>
-          <span className="text-3xl font-black text-crimson-400 mt-1 block">
-            Grade 6-8
+          <span className="text-sm font-bold text-slate-300 mt-2 block">
+            {isSupabaseConfigured() ? 'Supabase RLS Active' : 'Local Demo (No DB)'}
           </span>
         </div>
       </div>
@@ -115,7 +148,7 @@ export default function Dashboard({
             placeholder="Search reports by title or laboratory facility..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 text-xs sm:text-sm bg-black/40 border border-white/10 rounded-2xl text-white placeholder:text-slate-500 focus:outline-none focus:border-crimson-500"
+            className="w-full pl-10 pr-4 py-2.5 text-xs sm:text-sm bg-black/40 border border-white/10 rounded-2xl text-white placeholder:text-slate-500 focus:outline-none focus:border-red-500"
           />
         </div>
 
@@ -125,7 +158,7 @@ export default function Dashboard({
             onClick={() => setStatusFilter('all')}
             className={`px-3.5 py-1.5 rounded-full transition cursor-pointer ${
               statusFilter === 'all'
-                ? 'bg-crimson-600 text-white font-bold'
+                ? 'bg-red-600 text-white font-bold'
                 : 'text-slate-400 hover:text-white bg-white/5'
             }`}
           >
@@ -156,7 +189,7 @@ export default function Dashboard({
           {reports.length > 0 ? (
             <button
               onClick={onClearReports}
-              className="text-[11px] text-slate-500 hover:text-crimson-400 underline ml-2 cursor-pointer"
+              className="text-[11px] text-slate-500 hover:text-red-400 underline ml-2 cursor-pointer"
               title="Clear to test Empty State"
             >
               Test Empty
@@ -164,7 +197,7 @@ export default function Dashboard({
           ) : (
             <button
               onClick={onRestoreSamples}
-              className="text-[11px] text-crimson-400 font-bold hover:underline ml-2 cursor-pointer"
+              className="text-[11px] text-red-400 font-bold hover:underline ml-2 cursor-pointer"
             >
               Restore Samples
             </button>
@@ -181,17 +214,19 @@ export default function Dashboard({
 
           <div className="space-y-1">
             <h3 className="font-bold text-white text-lg">
-              No Laboratory Reports Found
+              No Saved Reports
             </h3>
             <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
-              You haven't uploaded any pathology or blood reports. Upload your first document or load realistic clinical samples.
+              {currentUser
+                ? 'You have not saved any laboratory summaries to your account yet. Reports you analyze are kept private and only saved when you explicitly choose.'
+                : 'You have not uploaded any pathology or blood reports. Upload your first document or load realistic clinical samples.'}
             </p>
           </div>
 
           <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
             <button
               onClick={onOpenUpload}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-crimson-600 hover:bg-crimson-500 text-white font-bold text-xs px-5 py-2.5 rounded-full shadow-lg shadow-crimson-600/30 transition cursor-pointer"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-[#e51d38] hover:bg-red-600 text-white font-bold text-xs px-5 py-2.5 rounded-full shadow-lg shadow-red-600/30 transition cursor-pointer"
             >
               <UploadCloud className="w-4 h-4" />
               <span>Upload First Report</span>
@@ -214,7 +249,7 @@ export default function Dashboard({
               setSearchTerm('');
               setStatusFilter('all');
             }}
-            className="text-xs font-bold text-crimson-400 underline cursor-pointer"
+            className="text-xs font-bold text-red-400 underline cursor-pointer"
           >
             Clear Filters
           </button>
@@ -227,10 +262,12 @@ export default function Dashboard({
             return (
               <div
                 key={report.id}
-                onClick={() => onSelectReport(report)}
-                className="glass-panel hover:bg-white/[0.08] rounded-3xl p-6 transition cursor-pointer group flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-white/10 hover:border-crimson-500/40"
+                className="glass-panel hover:bg-white/[0.08] rounded-3xl p-6 transition group flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-white/10 hover:border-red-500/40"
               >
-                <div className="flex items-start gap-4">
+                <div 
+                  onClick={() => onSelectReport(report)}
+                  className="flex items-start gap-4 flex-1 cursor-pointer"
+                >
                   <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 mt-0.5 ${
                     hasAttention 
                       ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' 
@@ -245,7 +282,7 @@ export default function Dashboard({
 
                   <div className="space-y-1.5">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="font-bold text-white text-base sm:text-lg group-hover:text-crimson-400 transition">
+                      <h3 className="font-bold text-white text-base sm:text-lg group-hover:text-red-400 transition">
                         {report.title}
                       </h3>
                       <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${
@@ -255,6 +292,11 @@ export default function Dashboard({
                       }`}>
                         {hasAttention ? 'Review Needed' : 'Normal Limits'}
                       </span>
+                      {report.is_saved_in_supabase && (
+                        <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                          Saved in Cloud
+                        </span>
+                      )}
                     </div>
 
                     <p className="text-xs text-slate-300 line-clamp-1 max-w-xl">
@@ -268,18 +310,34 @@ export default function Dashboard({
                       <span>•</span>
                       <span>{report.labName}</span>
                       <span>•</span>
-                      <span className="text-crimson-400 font-semibold">
+                      <span className="text-red-400 font-semibold">
                         {report.parameters?.length || 0} Parameters Extracted
                       </span>
                     </div>
                   </div>
                 </div>
 
-                <div className="flex items-center justify-end">
-                  <span className="text-xs font-bold text-crimson-400 group-hover:text-crimson-300 flex items-center gap-1">
-                    <span>Inspect Results</span>
+                <div className="flex items-center gap-3">
+                  {onDeleteReport && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteReport(report.id);
+                      }}
+                      className="text-xs text-slate-500 hover:text-rose-400 p-2 rounded-xl hover:bg-white/5 transition cursor-pointer"
+                      title="Delete Report"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => onSelectReport(report)}
+                    className="text-xs font-bold text-red-400 group-hover:text-red-300 flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>Inspect</span>
                     <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition" />
-                  </span>
+                  </button>
                 </div>
               </div>
             );
