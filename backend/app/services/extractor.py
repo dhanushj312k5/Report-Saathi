@@ -1,0 +1,370 @@
+import os
+import re
+import tempfile
+import logging
+from typing import Tuple, List, Dict, Any, Optional
+from PIL import Image, UnidentifiedImageError
+import pytesseract
+import pdfplumber
+import pypdfium2
+
+from app.core.config import settings
+from app.models.schemas import TestParameter, TestStatus, OverallStatus
+
+logger = logging.getLogger(__name__)
+
+# Configure tesseract executable
+if settings.TESSERACT_CMD and os.path.exists(settings.TESSERACT_CMD):
+    pytesseract.pytesseract.tesseract_cmd = settings.TESSERACT_CMD
+
+# Laboratory knowledge dictionary for plain-language explanations
+LAB_GLOSSARY = {
+    "hemoglobin": {
+        "display": "Hemoglobin (Hb)",
+        "category": "Complete Blood Count",
+        "simple": "The iron-rich protein in red blood cells that transports oxygen from your lungs to the rest of your body.",
+        "why": "Adequate levels ensure your body organs receive enough oxygen for energy, stamina, and vital functions."
+    },
+    "rbc": {
+        "display": "Total RBC Count",
+        "category": "Complete Blood Count",
+        "simple": "The total number of red blood cells circulating in your bloodstream.",
+        "why": "Red blood cells carry oxygen and nutrients to tissues throughout the body."
+    },
+    "wbc": {
+        "display": "Total Leukocytes (WBC)",
+        "category": "Immune Defense",
+        "simple": "Your immune system's frontline defense cells that detect and combat infections.",
+        "why": "A normal count indicates your body is not actively fighting a major acute infection or inflammation."
+    },
+    "platelet": {
+        "display": "Platelet Count",
+        "category": "Clotting Function",
+        "simple": "Cell fragments that bind together to form clots and stop bleeding when vessels are injured.",
+        "why": "Essential for proper wound healing and preventing internal or excessive bleeding."
+    },
+    "hematocrit": {
+        "display": "Hematocrit (PCV)",
+        "category": "Complete Blood Count",
+        "simple": "The percentage of whole blood volume composed of red oxygen-carrying blood cells.",
+        "why": "Helps assess blood thickness, hydration status, and oxygen carrying capacity."
+    },
+    "mcv": {
+        "display": "Mean Corpuscular Volume (MCV)",
+        "category": "Red Blood Cell Indices",
+        "simple": "The average physical size or volume of individual red blood cells.",
+        "why": "Helps distinguish between different causes of anemia (such as iron deficiency vs. vitamin B12 deficiency)."
+    },
+    "cholesterol": {
+        "display": "Total Cholesterol",
+        "category": "Lipid Profile",
+        "simple": "Total measure of all cholesterol types in your blood. Used by the liver to build cell membranes and hormones.",
+        "why": "Maintaining desirable total levels helps keep arteries clear and protects heart health."
+    },
+    "triglyceride": {
+        "display": "Triglycerides",
+        "category": "Lipid Profile",
+        "simple": "The main form of stored fat in your body, created when you consume calories not immediately burned.",
+        "why": "Keeping triglycerides in balance protects cardiovascular health and pancreas function."
+    },
+    "hdl": {
+        "display": "HDL Cholesterol ('Good')",
+        "category": "Lipid Profile",
+        "simple": "High-Density Lipoprotein acts like a scavenger, removing excess cholesterol from blood vessels back to the liver.",
+        "why": "Higher HDL numbers naturally defend blood vessels against plaque accumulation."
+    },
+    "ldl": {
+        "display": "LDL Cholesterol ('Bad')",
+        "category": "Lipid Profile",
+        "simple": "Low-Density Lipoprotein carries cholesterol to tissues; excess amounts can slowly build up along artery walls.",
+        "why": "Maintaining lower LDL levels reduces the risk of cardiovascular events."
+    },
+    "glucose": {
+        "display": "Fasting Blood Glucose",
+        "category": "Metabolic & Sugar",
+        "simple": "The amount of sugar circulating in your blood after an overnight fast.",
+        "why": "Key metric for detecting pre-diabetes, insulin resistance, and cellular energy regulation."
+    },
+    "sugar": {
+        "display": "Blood Sugar",
+        "category": "Metabolic & Sugar",
+        "simple": "Circulating sugar fuel available for your cells and brain.",
+        "why": "Balanced levels provide steady daytime energy and protect blood vessels."
+    },
+    "hba1c": {
+        "display": "Glycated Hemoglobin (HbA1c)",
+        "category": "Diabetes Management",
+        "simple": "Reflects your average blood sugar levels over the past 2 to 3 months by measuring sugar attached to hemoglobin.",
+        "why": "The gold standard metric for diagnosing and monitoring long-term glycemic control."
+    },
+    "creatinine": {
+        "display": "Serum Creatinine",
+        "category": "Renal / Kidney Function",
+        "simple": "A natural waste product generated by daily muscle wear and tear, filtered out by healthy kidneys.",
+        "why": "One of the most reliable markers of how effectively your kidneys are filtering waste from blood."
+    },
+    "bun": {
+        "display": "Blood Urea Nitrogen (BUN)",
+        "category": "Renal / Kidney Function",
+        "simple": "Measures urea nitrogen formed in the liver when dietary proteins are metabolized.",
+        "why": "Reflects kidney filtration performance and daily hydration balance."
+    },
+    "egfr": {
+        "display": "Estimated GFR (eGFR)",
+        "category": "Renal / Kidney Function",
+        "simple": "Calculates the rate at which your kidneys filter blood each minute.",
+        "why": "Values above 90 mL/min represent robust, optimal kidney performance."
+    },
+    "uric acid": {
+        "display": "Uric Acid",
+        "category": "Metabolic & Joint Health",
+        "simple": "A waste product produced when your body breaks down purines found in certain foods and cells.",
+        "why": "High levels can form painful crystals in joints (gout) or form kidney stones."
+    },
+    "tsh": {
+        "display": "Thyroid Stimulating Hormone (TSH)",
+        "category": "Endocrine / Thyroid",
+        "simple": "A pituitary hormone that controls how much active thyroid hormone your thyroid gland produces.",
+        "why": "Regulates your overall metabolism, energy consumption, and heart rate."
+    },
+    "alt": {
+        "display": "Alanine Aminotransferase (ALT / SGPT)",
+        "category": "Liver Function",
+        "simple": "An enzyme found predominantly in liver cells, released into the blood when liver cells are stressed.",
+        "why": "Primary indicator of liver cell health and inflammation."
+    },
+    "ast": {
+        "display": "Aspartate Aminotransferase (AST / SGOT)",
+        "category": "Liver Function",
+        "simple": "An enzyme present in the liver, heart, and muscle tissue.",
+        "why": "Helps evaluate overall liver and muscular tissue health."
+    },
+    "bilirubin": {
+        "display": "Total Bilirubin",
+        "category": "Liver Function",
+        "simple": "A yellowish substance created during the normal recycling of old red blood cells.",
+        "why": "Processed by the liver; elevated levels can lead to jaundice."
+    }
+}
+
+def sanitize_pii(text: str) -> str:
+    """Lightweight redaction of obvious personal identifying numbers and emails."""
+    if not text:
+        return ""
+    text = re.sub(r'[\w\.-]+@[\w\.-]+\.\w+', '[REDACTED_EMAIL]', text)
+    text = re.sub(r'(?:(?:\+|0{0,2})91(\s*[\-]\s*)?|[0]?)?[6789]\d{9}', '[REDACTED_PHONE]', text)
+    text = re.sub(r'\b\d{4}\s\d{4}\s\d{4}\b', '[REDACTED_ID]', text)
+    return text
+
+def extract_from_pdf_file(file_path: str) -> Tuple[str, str]:
+    """
+    Safely extracts text from a PDF file.
+    First tries digital text extraction with pdfplumber.
+    If extracted text is under 40 non-whitespace chars (scanned document), falls back to OCR via pypdfium2 + Tesseract.
+    """
+    extracted_text = ""
+    source_type = "digital_pdf"
+
+    try:
+        with pdfplumber.open(file_path) as pdf:
+            pages = []
+            for page in pdf.pages:
+                text = page.extract_text(layout=True)
+                if text:
+                    pages.append(text)
+            extracted_text = "\n\n".join(pages).strip()
+    except Exception as e:
+        logger.warning(f"pdfplumber extraction encountered an issue: {e}")
+
+    # Fallback to OCR if minimal or zero digital text found
+    clean_alpha = re.sub(r'\s+', '', extracted_text)
+    if len(clean_alpha) < 40:
+        logger.info("PDF has minimal digital text; invoking Tesseract OCR via pypdfium2...")
+        try:
+            pdf = pypdfium2.PdfDocument(file_path)
+            ocr_pages = []
+            for i in range(len(pdf)):
+                page = pdf[i]
+                pil_img = page.render(scale=2.0).to_pil()
+                text = pytesseract.image_to_string(pil_img)
+                if text and text.strip():
+                    ocr_pages.append(text.strip())
+            extracted_text = "\n\n".join(ocr_pages).strip()
+            source_type = "scanned_pdf_ocr"
+        except Exception as ocr_err:
+            logger.error(f"OCR fallback on PDF failed: {ocr_err}")
+
+    return sanitize_pii(extracted_text), source_type
+
+def extract_from_image_file(file_path: str) -> Tuple[str, str]:
+    """
+    Extracts text from an image file (PNG, JPG, JPEG) using Tesseract OCR.
+    """
+    source_type = "image_ocr"
+    try:
+        with Image.open(file_path) as image:
+            if image.mode not in ("L", "RGB"):
+                image = image.convert("RGB")
+            text = pytesseract.image_to_string(image)
+            return sanitize_pii(text.strip()), source_type
+    except UnidentifiedImageError:
+        raise ValueError("File appears corrupted or is not a valid image format.")
+    except Exception as e:
+        logger.error(f"Image OCR failed: {e}")
+        raise ValueError(f"Unable to process image: {str(e)}")
+
+def parse_parameters_from_text(extracted_text: str) -> List[TestParameter]:
+    """
+    STRICT EXTRACTOR: Never invents missing report values or reference ranges.
+    Only returns parameters that actually appear in the extracted text.
+    """
+    detected_params: List[TestParameter] = []
+    lines = extracted_text.splitlines()
+    found_keys = set()
+
+    for line in lines:
+        line_clean = line.strip()
+        if not line_clean or len(line_clean) < 4:
+            continue
+        line_lower = line_clean.lower()
+
+        # Match known clinical tests in line
+        for key, info in LAB_GLOSSARY.items():
+            if key in line_lower and key not in found_keys:
+                # Look for a number in the line that represents the result
+                # Match patterns like: "14.5", "224", "11.2", "0.85", "< 200", "> 40", "240,000"
+                num_match = re.search(r'[:\s]\s*(\d+(?:\.\d+)?|\d{1,3}(?:,\d{3})+)', line_clean)
+                if not num_match:
+                    continue
+
+                raw_value = num_match.group(1).replace(',', '')
+                
+                # Look for units
+                unit_match = re.search(r'(mg/dl|g/dl|mmol/l|%|/ul|/cumm|mil/ul|fl|pg|ml/min|iu/l|u/l|ng/ml|pmol/l)', line_clean, re.IGNORECASE)
+                detected_unit = unit_match.group(1) if unit_match else ""
+
+                # Look for reference range stated explicitly in the document
+                # e.g., "13.0 - 17.0", "< 200", "70 - 99", "0.7 - 1.3"
+                ref_match = re.search(r'(\d+(?:\.\d+)?\s*[-–—]\s*\d+(?:\.\d+)?|[<>]\s*\d+(?:\.\d+)?)', line_clean[num_match.end():])
+                
+                if ref_match:
+                    detected_ref = ref_match.group(1).strip()
+                else:
+                    # NEVER invent missing reference range: mark explicitly as N/A
+                    detected_ref = "N/A (Not specified in report)"
+
+                # Determine status if reference range was printed in the report
+                status = TestStatus.NORMAL
+                status_label = "Normal Range"
+                gauge = 50
+
+                try:
+                    val_float = float(raw_value)
+                    if "<" in detected_ref:
+                        cutoff = float(re.search(r'<\s*(\d+(?:\.\d+)?)', detected_ref).group(1))
+                        if val_float > cutoff:
+                            status = TestStatus.HIGH
+                            status_label = "Above Target"
+                            gauge = 75
+                        else:
+                            gauge = 40
+                    elif ">" in detected_ref:
+                        cutoff = float(re.search(r'>\s*(\d+(?:\.\d+)?)', detected_ref).group(1))
+                        if val_float < cutoff:
+                            status = TestStatus.LOW
+                            status_label = "Below Target"
+                            gauge = 30
+                        else:
+                            gauge = 60
+                    elif "-" in detected_ref or "–" in detected_ref:
+                        parts = re.split(r'[-–—]', detected_ref)
+                        low_val = float(parts[0].strip())
+                        high_val = float(parts[1].strip())
+                        if val_float > high_val:
+                            status = TestStatus.HIGH
+                            status_label = "Above Target"
+                            gauge = 80
+                        elif val_float < low_val:
+                            status = TestStatus.LOW
+                            status_label = "Below Target"
+                            gauge = 25
+                        else:
+                            gauge = 50
+                    else:
+                        status = TestStatus.INCONCLUSIVE
+                        status_label = "Recorded Reading"
+                except Exception:
+                    status = TestStatus.INCONCLUSIVE
+                    status_label = "Recorded Reading"
+
+                detected_params.append(TestParameter(
+                    name=info["display"],
+                    category=info["category"],
+                    value=num_match.group(1),
+                    unit=detected_unit,
+                    reference_range=detected_ref,
+                    status=status,
+                    status_label=status_label,
+                    simple_explanation=info["simple"],
+                    why_it_matters=info["why"],
+                    gauge_percentage=gauge
+                ))
+                found_keys.add(key)
+                break
+
+    return detected_params
+
+def generate_educational_insights(parameters: List[TestParameter], extracted_text: str) -> Tuple[str, OverallStatus, List[str], List[str], List[str]]:
+    """
+    Builds plain-language educational summary, key takeaways, and doctor questions
+    based ONLY on the parameters that were actually detected in the document.
+    """
+    if not parameters:
+        return (
+            "We extracted text from your laboratory document, but could not detect standardized clinical blood markers. Please review the raw extracted text below.",
+            OverallStatus.ALL_NORMAL,
+            ["Document text was extracted successfully.", "No standardized blood parameter intervals detected in text."],
+            ["Are there specific parameters on this report you would like to review together?", "Is this an unstandardized or specialized pathology panel?"],
+            ["Always bring your printed or original laboratory slip to your healthcare provider for clinical evaluation."]
+        )
+
+    abnormal_params = [p for p in parameters if p.status in (TestStatus.HIGH, TestStatus.LOW)]
+    overall_status = OverallStatus.ATTENTION_NEEDED if abnormal_params else OverallStatus.ALL_NORMAL
+
+    if abnormal_params:
+        names = ", ".join([p.name for p in abnormal_params[:3]])
+        summary = (
+            f"Your report shows {len(parameters)} extracted parameter{'s' if len(parameters) > 1 else ''}. "
+            f"Most markers appear in stable order, while {len(abnormal_params)} parameter{'s' if len(abnormal_params) > 1 else ''} "
+            f"({names}) sit outside the reference intervals noted on your document. "
+            f"These readings are common conversation starters for preventive care with your physician."
+        )
+    else:
+        summary = (
+            f"All {len(parameters)} extracted biomarker{'s' if len(parameters) > 1 else ''} in this report "
+            f"fall comfortably within the standard reference intervals printed by your laboratory. "
+            f"This represents positive baseline stability across the tested parameters."
+        )
+
+    key_takeaways = []
+    for p in parameters[:4]:
+        if p.status == TestStatus.HIGH:
+            key_takeaways.append(f"{p.name} is {p.value} {p.unit} (higher than printed range {p.reference_range}).")
+        elif p.status == TestStatus.LOW:
+            key_takeaways.append(f"{p.name} is {p.value} {p.unit} (lower than printed range {p.reference_range}).")
+        else:
+            key_takeaways.append(f"{p.name} is in standard range at {p.value} {p.unit}.")
+
+    doctor_questions = [
+        "Do any of these readings warrant repeating in 3 to 6 months to evaluate long-term trends?",
+        "Are there lifestyle or nutritional steps you recommend based specifically on these numbers?",
+        "How do these results compare with my previous health history?"
+    ]
+
+    lifestyle_tips = [
+        "Maintain consistent hydration with water throughout the day.",
+        "Incorporate a colorful variety of whole vegetables, beans, and fiber-rich grains.",
+        "Engage in 20–30 minutes of moderate activity (e.g. brisk walking) most days of the week."
+    ]
+
+    return summary, overall_status, key_takeaways, doctor_questions, lifestyle_tips
